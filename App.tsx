@@ -43,6 +43,10 @@ const App: React.FC = () => {
     showMeanings: true
   });
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  
+  // Refs for scrolling
+  const slotsContainerRef = useRef<HTMLDivElement>(null);
+  const deckContainerRef = useRef<HTMLDivElement>(null);
 
   // --- Effects ---
   useEffect(() => {
@@ -55,6 +59,19 @@ const App: React.FC = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Auto-scroll slots when a card is drawn
+  useEffect(() => {
+    if (step === AppStep.SHUFFLE_AND_DRAW && slotsContainerRef.current) {
+        // Scroll to the next empty slot (current drawn count)
+        const slotWidth = isMobile ? 100 : 120; // approximate width + gap
+        const scrollPos = drawnCards.length * slotWidth;
+        slotsContainerRef.current.scrollTo({
+            left: scrollPos,
+            behavior: 'smooth'
+        });
+    }
+  }, [drawnCards.length, step, isMobile]);
 
   const saveToHistory = (newReading: ReadingResult) => {
     const updated = [newReading, ...history];
@@ -367,36 +384,132 @@ const App: React.FC = () => {
   );
 
   const renderShuffleAndDraw = () => {
-    // --- RESPONSIVE FAN LOGIC ---
-    // Mobile: tighter arc (-45 to 45), smaller radius, smaller cards to fit 78 cards on screen
-    // Desktop: wide arc (-100 to 100), larger radius, larger cards
-    
-    const radius = isMobile ? 220 : 350; 
-    const startAngle = isMobile ? -45 : -95;
-    const endAngle = isMobile ? 45 : 95;
-    const angleStep = (endAngle - startAngle) / 78; // totalCards
-    
-    // Position of the Fan Container
-    const fanBottomOffset = isMobile ? -140 : -250; 
-    const fanWidth = isMobile ? 320 : 800; // Constrain width on mobile
+    // === MOBILE LAYOUT (OPTIMIZED FOR USABILITY) ===
+    if (isMobile) {
+        return (
+            <div className="h-[calc(100vh-80px)] w-full flex flex-col relative">
+                {/* 1. Header Area: Draw Progress */}
+                <div className="px-6 py-4 flex-none">
+                    <h3 className="text-xl text-amber-100 font-serif mb-1 text-center">
+                        {drawnCards.length < selectedSpread.cardCount ? '请抽牌' : '抽取完成'}
+                    </h3>
+                    <p className="text-slate-400 text-sm text-center">
+                        已选择 {drawnCards.length} / {selectedSpread.cardCount} 张
+                    </p>
+                </div>
 
+                {/* 2. Slot Stream (Top): Horizontal Scrollable list of slots */}
+                <div 
+                    ref={slotsContainerRef}
+                    className="flex-none w-full overflow-x-auto px-6 pb-4 flex gap-3 snap-x scrollbar-hide"
+                >
+                    {Array.from({length: selectedSpread.cardCount}).map((_, i) => {
+                        const isCurrentTarget = i === drawnCards.length;
+                        const hasCard = drawnCards[i];
+
+                        return (
+                            <div key={i} className="snap-center flex flex-col items-center gap-2 flex-shrink-0">
+                                <div className={`w-20 h-32 rounded-lg border-2 flex items-center justify-center transition-all duration-300 relative overflow-hidden
+                                    ${hasCard 
+                                      ? 'border-amber-500 bg-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.3)]' 
+                                      : isCurrentTarget 
+                                        ? 'border-amber-500/50 border-dashed bg-slate-800/50 scale-105 shadow-[0_0_10px_rgba(245,158,11,0.1)]'
+                                        : 'border-slate-800 border-dashed bg-slate-900/30 opacity-70'}`}>
+                                    
+                                    {hasCard ? (
+                                        <>
+                                            {/* Minimal card back visual for drawn cards */}
+                                            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-30"></div>
+                                            <div className="w-6 h-6 rounded-full bg-amber-500 flex items-center justify-center text-black font-bold text-xs z-10">
+                                                {i + 1}
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <span className={`text-sm font-bold ${isCurrentTarget ? 'text-amber-500' : 'text-slate-600'}`}>
+                                            {i + 1}
+                                        </span>
+                                    )}
+                                </div>
+                                <span className={`text-[10px] uppercase tracking-wider text-center max-w-[80px] truncate ${isCurrentTarget ? 'text-amber-200' : 'text-slate-600'}`}>
+                                    {selectedSpread.positions[i]?.split('/')[0]}
+                                </span>
+                            </div>
+                        );
+                    })}
+                    {/* Spacer for easier scrolling */}
+                    <div className="w-4 flex-shrink-0"></div>
+                </div>
+
+                {/* 3. Deck Area (Bottom): Large Horizontal "Ribbon" Scroll */}
+                {drawMode === DrawMode.AUTO ? (
+                    <div className="flex-1 flex items-center justify-center">
+                         <button 
+                            onClick={handleAutoDraw}
+                            className="w-40 h-40 rounded-full bg-amber-500/10 border border-amber-500/50 backdrop-blur-sm flex flex-col items-center justify-center gap-3 hover:bg-amber-500/20 transition-all animate-pulse active:scale-95"
+                        >
+                            <MagicIcon />
+                            <span className="text-amber-200 font-bold text-lg">一键抽取</span>
+                        </button>
+                    </div>
+                ) : (
+                    <div className="flex-1 relative overflow-hidden mt-4">
+                        <div className="absolute top-0 left-0 w-full text-center pointer-events-none z-10">
+                             <p className="text-xs text-slate-500 bg-[#0f0c29]/80 inline-block px-3 py-1 rounded-full border border-slate-800">
+                                 &larr; 左右滑动挑选卡牌 &rarr;
+                             </p>
+                        </div>
+                        
+                        <div 
+                            ref={deckContainerRef}
+                            className="absolute inset-0 overflow-x-auto flex items-end px-6 pb-8 gap-[-10px] scrollbar-hide"
+                        >
+                            {/* The "Stream" of cards */}
+                            {deck.map((card, i) => (
+                                <div 
+                                    key={card.id}
+                                    onClick={() => drawCardAtIndex(i)}
+                                    className="flex-shrink-0 w-24 h-40 rounded-xl bg-slate-800 border border-white/10 shadow-2xl relative -ml-8 first:ml-0 transition-all duration-200 active:translate-y-[-20px] active:scale-110 active:z-50 hover:-translate-y-4 hover:z-40 cursor-pointer overflow-hidden group"
+                                    style={{ zIndex: i }} // Simple stacking order
+                                >
+                                     <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-40"></div>
+                                     <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 via-indigo-900/40 to-amber-900/20"></div>
+                                     <div className="absolute inset-1 border border-white/5 rounded-lg flex items-center justify-center">
+                                         <div className="w-2 h-2 rounded-full bg-amber-500/50 shadow-[0_0_8px_rgba(245,158,11,0.6)] group-hover:bg-amber-400 transition-colors"></div>
+                                     </div>
+                                </div>
+                            ))}
+                            {/* End spacer */}
+                            <div className="w-12 flex-shrink-0"></div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // === DESKTOP LAYOUT (ORIGINAL FAN) ===
+    const radius = 350; 
+    const startAngle = -95;
+    const endAngle = 95;
+    const angleStep = (endAngle - startAngle) / 78;
+    
     return (
       <div className="h-[calc(100vh-80px)] w-full relative overflow-hidden flex flex-col items-center">
-        {/* Top: Spread Slots Status - Improved to wrap on small screens */}
-        <div className="mt-4 md:mt-8 z-20 flex gap-2 md:gap-4 flex-wrap justify-center px-2 max-h-[30vh] overflow-y-auto scrollbar-hide">
+        {/* Top: Spread Slots Status */}
+        <div className="mt-8 z-20 flex gap-4 flex-wrap justify-center px-4">
            {Array.from({length: selectedSpread.cardCount}).map((_, i) => (
-              <div key={i} className="flex flex-col items-center gap-1 md:gap-2">
-                 <div className={`w-12 h-18 md:w-16 md:h-24 rounded border-2 flex items-center justify-center transition-all duration-500
+              <div key={i} className="flex flex-col items-center gap-2">
+                 <div className={`w-16 h-24 rounded border-2 flex items-center justify-center transition-all duration-500
                     ${drawnCards[i] 
                       ? 'border-amber-500 bg-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.4)]' 
                       : 'border-slate-700 border-dashed bg-slate-900/50'}`}>
                     {drawnCards[i] ? (
-                       <div className="text-amber-500 text-lg md:text-xl">✓</div>
+                       <div className="text-amber-500 text-xl">✓</div>
                     ) : (
-                       <span className="text-slate-600 text-[10px] md:text-xs font-bold">{i + 1}</span>
+                       <span className="text-slate-600 text-xs font-bold">{i + 1}</span>
                     )}
                  </div>
-                 <span className="text-[9px] md:text-[10px] text-slate-500 uppercase tracking-wider text-center max-w-[60px] truncate">
+                 <span className="text-[10px] text-slate-500 uppercase tracking-wider text-center max-w-[60px] truncate">
                     {selectedSpread.positions[i]?.split('/')[0]}
                  </span>
               </div>
@@ -404,7 +517,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Center Prompt */}
-        <div className="mt-8 md:mt-12 text-center z-20 pointer-events-none px-4">
+        <div className="mt-12 text-center z-20 pointer-events-none px-4">
            <h3 className="text-xl text-amber-100 font-serif mb-1">
              {drawnCards.length < selectedSpread.cardCount ? '请抽牌' : '完成'}
            </h3>
@@ -413,7 +526,7 @@ const App: React.FC = () => {
            </p>
         </div>
 
-        {/* Auto Draw Button (if mode is Auto) */}
+        {/* Auto Draw Button */}
         {drawMode === DrawMode.AUTO && (
            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30">
               <button 
@@ -429,40 +542,29 @@ const App: React.FC = () => {
         {/* The Fan */}
         <div 
             className="absolute left-1/2 -translate-x-1/2 rounded-full z-10"
-            style={{
-                width: `${fanWidth}px`,
-                height: `${fanWidth}px`, // Keep it somewhat circular or square context
-                bottom: `${fanBottomOffset}px`
-            }}
+            style={{ width: '800px', height: '800px', bottom: '-250px' }}
         >
            {drawMode === DrawMode.MANUAL && deck.map((card, i) => {
               const angle = startAngle + (i * angleStep);
-              // Slight random offset for realism
               const randomY = (card.imageSeed % 5) * 4; 
               
               return (
                  <div 
                    key={card.id}
-                   className="absolute top-1/2 left-1/2 -ml-5 -mt-8 md:-ml-12 md:-mt-18 origin-bottom transition-all duration-300 hover:-translate-y-10 cursor-pointer"
+                   className="absolute top-1/2 left-1/2 -ml-12 -mt-18 origin-bottom transition-all duration-300 hover:-translate-y-10 cursor-pointer"
                    style={{
-                      width: isMobile ? '40px' : '96px', // Matches xs vs sm sizes approx
-                      height: isMobile ? '64px' : '144px',
+                      width: '96px',
+                      height: '144px',
                       transform: `rotate(${angle}deg) translateY(-${radius + randomY}px)`,
                       zIndex: i
                    }}
                    onClick={() => drawCardAtIndex(i)}
                  >
-                    <Card 
-                        isRevealed={false} 
-                        size={isMobile ? 'xs' : 'sm'} 
-                        showLabel={false} 
-                        className="shadow-lg hover:shadow-amber-500/50 hover:ring-2 ring-amber-400/50 rounded-lg" 
-                    />
+                    <Card isRevealed={false} size="sm" showLabel={false} className="shadow-lg hover:shadow-amber-500/50 hover:ring-2 ring-amber-400/50 rounded-lg" />
                  </div>
               );
            })}
            
-           {/* Decorative center of fan - Only show on desktop or if space permits */}
            {!isMobile && drawMode === DrawMode.MANUAL && (
              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-[#0f0c29] rounded-full border border-slate-700 blur-xl"></div>
            )}
