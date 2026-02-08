@@ -1,7 +1,10 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import { DrawnCard, InterpretationResponse, Spread, Tone } from "../types";
 
-const getSystemInstruction = (tone: Tone): string => {
+// DeepSeek API Configuration
+const API_URL = "https://api.deepseek.com/chat/completions";
+const MODEL_NAME = "deepseek-chat"; 
+
+const getSystemPrompt = (tone: Tone): string => {
   let toneInstruction = "";
   switch (tone) {
     case Tone.GENTLE:
@@ -18,9 +21,12 @@ const getSystemInstruction = (tone: Tone): string => {
   return `你是一位专业的塔罗牌占卜师。${toneInstruction}
 
   **核心规则**：
-  1.  拒绝机械式解读，请将牌面含义、正逆位与位置含义深度结合。
-  2.  **禁止**使用中英对照（如 "Success/成功"），仅使用中文。
-  3.  **禁止**输出任何思考过程或备注，直接输出最终解读结果。
+  1.  **输出格式**：必须且只能返回合法的 **JSON** 格式。
+  2.  **内容要求**：
+      -   拒绝机械式解读，请将牌面含义、正逆位与位置含义深度结合。
+      -   **禁止**使用中英对照（如 "Success/成功"），仅使用中文。
+      -   **禁止**输出任何思考过程或备注，直接输出最终解读结果。
+      -   JSON 结构必须严格符合要求。
   `;
 };
 
@@ -34,8 +40,6 @@ export const generateTarotReading = async (
     throw new Error("API Key is missing. Please set the API_KEY environment variable.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
   const cardsDescription = cards.map((c, i) => 
     `第${i + 1}张 [位置:${c.positionName}]: ${c.name} (${c.isReversed ? '逆位' : '正位'})`
   ).join('\n');
@@ -47,42 +51,56 @@ export const generateTarotReading = async (
     【抽牌结果】:
     ${cardsDescription}
     
-    请根据以上信息进行解读。
+    请根据以上信息进行解读，并严格按照以下 JSON 格式返回数据：
+    
+    {
+      "summary": "一句直击要害的核心总结（纯中文）",
+      "cardAnalysis": [
+        {
+          "cardName": "牌名",
+          "position": "位置名",
+          "meaning": "针对该牌在该位置的详细深度解读（纯中文）"
+        }
+      ],
+      "advice": "具体的行动建议或指引（纯中文）"
+    }
+
     注意：cardAnalysis 数组中的顺序必须与输入的抽牌顺序严格一致（第1个元素对应第1张牌）。
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: userPrompt,
-      config: {
-        systemInstruction: getSystemInstruction(tone),
-        temperature: 1.1, // Slightly higher temperature for more creative tarot readings
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            summary: { type: Type.STRING },
-            cardAnalysis: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  cardName: { type: Type.STRING },
-                  position: { type: Type.STRING },
-                  meaning: { type: Type.STRING },
-                },
-                required: ["cardName", "position", "meaning"],
-              },
-            },
-            advice: { type: Type.STRING },
-          },
-          required: ["summary", "cardAnalysis", "advice"],
-        },
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.API_KEY}`
       },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: [
+          { role: "system", content: getSystemPrompt(tone) },
+          { role: "user", content: userPrompt }
+        ],
+        response_format: { type: "json_object" }, // Enforce JSON mode
+        temperature: 1.1,
+        max_tokens: 2000,
+        stream: false
+      })
     });
 
-    const result = JSON.parse(response.text || "{}") as InterpretationResponse;
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`DeepSeek API Error: ${response.status} ${JSON.stringify(errorData)}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+
+    if (!content) {
+      throw new Error("No content received from DeepSeek API");
+    }
+
+    const result = JSON.parse(content) as InterpretationResponse;
 
     // --- Post-processing / Validation ---
 
@@ -118,7 +136,7 @@ export const generateTarotReading = async (
     return result;
 
   } catch (error) {
-    console.error("Gemini API Processing Error:", error);
+    console.error("DeepSeek API Processing Error:", error);
     // Return mock fallback on error
     return {
       summary: "连接宇宙能量时遇到波动（网络或API错误），请稍后重试。",
