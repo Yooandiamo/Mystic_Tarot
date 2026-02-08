@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { DrawnCard, InterpretationResponse, Spread, Tone } from "../types";
 
-const getSystemInstruction = (tone: Tone) => {
+const getSystemInstruction = (tone: Tone): string => {
   let toneInstruction = "";
   switch (tone) {
     case Tone.GENTLE:
@@ -16,30 +16,12 @@ const getSystemInstruction = (tone: Tone) => {
   }
 
   return `你是一位专业的塔罗牌占卜师。${toneInstruction}
-  
-  **核心准则 (Strict Output Rules)**：
-  1. **拒绝废话模板**：严禁使用“这张牌代表...”、“它暗示了...”这种机械的句式。请直接切入重点，像讲故事一样解读。
-  2. **深度结合**：必须将“牌面含义”、“正逆位状态”与“当前位置含义”三者融合。
-  3. **输出纯净性（至关重要）**：
-     - **严禁**输出思考过程、草稿或备注（如：“注：这里我选择了...”、“修正后：...”）。
-     - **严禁**使用中英对照格式（如：“breakthrough/突破”），**只保留中文**。
-     - **严禁**重复啰嗦，JSON字段中的内容必须是**最终定稿**。
 
-  请用中文（简体）回答。
+  **核心规则**：
+  1.  拒绝机械式解读，请将牌面含义、正逆位与位置含义深度结合。
+  2.  **禁止**使用中英对照（如 "Success/成功"），仅使用中文。
+  3.  **禁止**输出任何思考过程或备注，直接输出最终解读结果。
   `;
-};
-
-// Helper to clean JSON string from Markdown code blocks
-const cleanJsonString = (text: string): string => {
-  if (!text) return "";
-  let clean = text.replace(/```json\n?|```/g, '').trim();
-  // Find the first '{' and last '}' to extract the JSON object
-  const firstBrace = clean.indexOf('{');
-  const lastBrace = clean.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    clean = clean.substring(firstBrace, lastBrace + 1);
-  }
-  return clean;
 };
 
 export const generateTarotReading = async (
@@ -54,136 +36,98 @@ export const generateTarotReading = async (
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  // improved formatting for clarity
   const cardsDescription = cards.map((c, i) => 
     `第${i + 1}张 [位置:${c.positionName}]: ${c.name} (${c.isReversed ? '逆位' : '正位'})`
   ).join('\n');
 
-  const prompt = `
+  const userPrompt = `
     【求问者疑惑】: "${question}"
     【使用牌阵】: ${spread.name}
     
-    【抽牌结果 (请严格按此顺序解读)】:
+    【抽牌结果】:
     ${cardsDescription}
     
-    任务：
-    1. **Key Insight (summary)**: 给出一段精炼的、直击要害的总结。**注意：直接输出最终结果，不要包含括号注释、不要中英对照、不要列出多个备选项。**
-    2. **Card Analysis**: 依次解读每一张牌。数组顺序必须与输入顺序完全一致（第1个解析对应第1张牌）。
-    3. **Actionable Advice (advice)**: 具体的建议。
+    请根据以上信息进行解读。
+    注意：cardAnalysis 数组中的顺序必须与输入的抽牌顺序严格一致（第1个元素对应第1张牌）。
   `;
 
-  const schema = {
-    type: Type.OBJECT,
-    properties: {
-      summary: {
-        type: Type.STRING,
-        description: "直击要害的总结。纯净中文，无备注。",
-      },
-      cardAnalysis: {
-        type: Type.ARRAY,
-        items: {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: userPrompt,
+      config: {
+        systemInstruction: getSystemInstruction(tone),
+        temperature: 1.1, // Slightly higher temperature for more creative tarot readings
+        responseMimeType: "application/json",
+        responseSchema: {
           type: Type.OBJECT,
           properties: {
-            // We ask for cardName just for debugging, but we rely on order
-            cardName: { type: Type.STRING },
-            meaning: { type: Type.STRING, description: "直接给出针对此牌在此位置的深度解读，不要重复牌名。" }
-          }
-        }
+            summary: { type: Type.STRING },
+            cardAnalysis: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  cardName: { type: Type.STRING },
+                  position: { type: Type.STRING },
+                  meaning: { type: Type.STRING },
+                },
+                required: ["cardName", "position", "meaning"],
+              },
+            },
+            advice: { type: Type.STRING },
+          },
+          required: ["summary", "cardAnalysis", "advice"],
+        },
       },
-      advice: {
-        type: Type.STRING,
-        description: "建议。纯净中文，无备注。"
-      }
+    });
+
+    const result = JSON.parse(response.text || "{}") as InterpretationResponse;
+
+    // --- Post-processing / Validation ---
+
+    // Ensure array exists
+    if (!Array.isArray(result.cardAnalysis)) {
+        result.cardAnalysis = [];
     }
-  };
 
-  const executeGeneration = async (modelName: string, useThinking: boolean) => {
-      const config: any = {
-        systemInstruction: getSystemInstruction(tone),
-        responseMimeType: "application/json",
-        responseSchema: schema,
-      };
-
-      if (useThinking) {
-         config.thinkingConfig = { thinkingBudget: 1024 };
-      }
-
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: prompt,
-        config: config
-      });
-      
-      return response.text;
-  };
-
-  let text: string | undefined;
-
-  try {
-    console.log("Calling Gemini 3 Pro...");
-    text = await executeGeneration('gemini-3-pro-preview', true);
-  } catch (error) {
-    console.warn("Gemini 3 Pro failed, attempting fallback...", error);
-    try {
-        console.log("Calling Gemini 3 Flash...");
-        text = await executeGeneration('gemini-3-flash-preview', false);
-    } catch (flashError) {
-        console.error("Gemini 3 Flash also failed.", flashError);
-        throw flashError;
-    }
-  }
-
-  try {
-    if (!text) throw new Error("No text response from AI");
-    
-    const cleanedText = cleanJsonString(text);
-    if (!cleanedText) throw new Error("Empty JSON content after cleaning");
-
-    const result = JSON.parse(cleanedText) as InterpretationResponse;
-
-    // --- Validation & Padding ---
-    
-    if (!result.summary) result.summary = "星象能量流转复杂，请重点参考下方的单牌解析。";
-    if (!result.advice) result.advice = "请跟随你的直觉，答案往往就在你心底最平静的地方。";
-    if (!Array.isArray(result.cardAnalysis)) result.cardAnalysis = [];
-
-    // --- CRITICAL FIX: STRICT INDEX MAPPING ---
-    // Instead of trying to match names (which is error-prone), we map strictly by index.
-    // Card 0 gets Analysis 0. If Analysis 0 is missing, we fallback.
-    
+    // Fallback/Padding logic: Ensure the output array length matches the drawn cards
     const finalAnalysis = cards.map((card, index) => {
         const aiAnalysis = result.cardAnalysis[index];
         
-        // Valid content check
-        if (aiAnalysis && aiAnalysis.meaning && aiAnalysis.meaning.length > 5) {
+        if (aiAnalysis && aiAnalysis.meaning) {
             return {
                 cardName: card.name, 
                 position: card.positionName,
-                meaning: aiAnalysis.meaning // Use the AI's text directly
+                meaning: aiAnalysis.meaning
             };
         }
         
-        // Fallback ONLY if AI missed this specific index
         return {
             cardName: card.name,
             position: card.positionName,
-            meaning: `此处能量显得隐晦。这张${card.name}（${card.isReversed ? '逆位' : '正位'}）静静地停留在${card.positionName}，邀请你自己去感受画面中的启示。`
+            meaning: `这张${card.name}（${card.isReversed ? '逆位' : '正位'}）出现在${card.positionName}。星象显示此时能量静默，请凭借直觉感受它的启示。`
         };
     });
 
     result.cardAnalysis = finalAnalysis;
+
+    if (!result.summary) result.summary = "星象变幻莫测，请聆听内心的声音。";
+    if (!result.advice) result.advice = "保持平静，答案自在心中。";
+
     return result;
 
   } catch (error) {
-    console.error("Processing Error:", error);
+    console.error("Gemini API Processing Error:", error);
+    // Return mock fallback on error
     return {
-      summary: "星象暂时模糊，请稍后重试。",
+      summary: "连接宇宙能量时遇到波动（网络或API错误），请稍后重试。",
       cardAnalysis: cards.map(c => ({
         cardName: c.name,
         position: c.positionName,
-        meaning: `解析暂时不可用。${c.name}`
+        meaning: `暂时无法获取详细解读。`
       })),
-      advice: "请检查网络连接。"
+      advice: "请检查您的网络连接或 API Key 设置。"
     };
   }
 };
