@@ -42,6 +42,7 @@ const App: React.FC = () => {
     tone: Tone.GENTLE,
     showMeanings: true
   });
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   // --- Effects ---
   useEffect(() => {
@@ -49,6 +50,10 @@ const App: React.FC = () => {
     if (saved) {
       setHistory(JSON.parse(saved));
     }
+
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const saveToHistory = (newReading: ReadingResult) => {
@@ -362,40 +367,44 @@ const App: React.FC = () => {
   );
 
   const renderShuffleAndDraw = () => {
-    // Calculate full circle fan
-    // We want the fan to be at the bottom half of the screen
-    const radius = 300; // Increased radius for better separation
-    const totalCards = 78; // Visual representation count
-    const visibleCards = deck.length; 
+    // --- RESPONSIVE FAN LOGIC ---
+    // Mobile: tighter arc (-45 to 45), smaller radius, smaller cards to fit 78 cards on screen
+    // Desktop: wide arc (-100 to 100), larger radius, larger cards
     
-    // Spread visual arc: e.g. -100deg to 100deg
-    const startAngle = -100;
-    const endAngle = 100;
-    const angleStep = (endAngle - startAngle) / totalCards;
+    const radius = isMobile ? 220 : 350; 
+    const startAngle = isMobile ? -45 : -95;
+    const endAngle = isMobile ? 45 : 95;
+    const angleStep = (endAngle - startAngle) / 78; // totalCards
+    
+    // Position of the Fan Container
+    const fanBottomOffset = isMobile ? -140 : -250; 
+    const fanWidth = isMobile ? 320 : 800; // Constrain width on mobile
 
     return (
       <div className="h-[calc(100vh-80px)] w-full relative overflow-hidden flex flex-col items-center">
-        {/* Top: Spread Slots Status */}
-        <div className="mt-8 z-20 flex gap-4">
+        {/* Top: Spread Slots Status - Improved to wrap on small screens */}
+        <div className="mt-4 md:mt-8 z-20 flex gap-2 md:gap-4 flex-wrap justify-center px-2 max-h-[30vh] overflow-y-auto scrollbar-hide">
            {Array.from({length: selectedSpread.cardCount}).map((_, i) => (
-              <div key={i} className="flex flex-col items-center gap-2">
-                 <div className={`w-16 h-24 rounded-lg border-2 flex items-center justify-center transition-all duration-500
+              <div key={i} className="flex flex-col items-center gap-1 md:gap-2">
+                 <div className={`w-12 h-18 md:w-16 md:h-24 rounded border-2 flex items-center justify-center transition-all duration-500
                     ${drawnCards[i] 
                       ? 'border-amber-500 bg-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.4)]' 
                       : 'border-slate-700 border-dashed bg-slate-900/50'}`}>
                     {drawnCards[i] ? (
-                       <div className="text-amber-500 text-xl">✓</div>
+                       <div className="text-amber-500 text-lg md:text-xl">✓</div>
                     ) : (
-                       <span className="text-slate-600 text-xs font-bold">{i + 1}</span>
+                       <span className="text-slate-600 text-[10px] md:text-xs font-bold">{i + 1}</span>
                     )}
                  </div>
-                 <span className="text-[10px] text-slate-500 uppercase tracking-wider">{selectedSpread.positions[i]?.split('/')[0]}</span>
+                 <span className="text-[9px] md:text-[10px] text-slate-500 uppercase tracking-wider text-center max-w-[60px] truncate">
+                    {selectedSpread.positions[i]?.split('/')[0]}
+                 </span>
               </div>
            ))}
         </div>
 
         {/* Center Prompt */}
-        <div className="mt-12 text-center z-20 pointer-events-none">
+        <div className="mt-8 md:mt-12 text-center z-20 pointer-events-none px-4">
            <h3 className="text-xl text-amber-100 font-serif mb-1">
              {drawnCards.length < selectedSpread.cardCount ? '请抽牌' : '完成'}
            </h3>
@@ -418,9 +427,15 @@ const App: React.FC = () => {
         )}
 
         {/* The Fan */}
-        <div className="absolute bottom-[-200px] left-1/2 -translate-x-1/2 w-[800px] h-[800px] rounded-full z-10">
+        <div 
+            className="absolute left-1/2 -translate-x-1/2 rounded-full z-10"
+            style={{
+                width: `${fanWidth}px`,
+                height: `${fanWidth}px`, // Keep it somewhat circular or square context
+                bottom: `${fanBottomOffset}px`
+            }}
+        >
            {drawMode === DrawMode.MANUAL && deck.map((card, i) => {
-              // Only render a subset if needed for performance, but 78 divs is usually fine
               const angle = startAngle + (i * angleStep);
               // Slight random offset for realism
               const randomY = (card.imageSeed % 5) * 4; 
@@ -428,20 +443,27 @@ const App: React.FC = () => {
               return (
                  <div 
                    key={card.id}
-                   className="absolute top-1/2 left-1/2 w-24 h-36 -ml-12 -mt-18 origin-bottom transition-all duration-300 hover:-translate-y-10 cursor-pointer"
+                   className="absolute top-1/2 left-1/2 -ml-5 -mt-8 md:-ml-12 md:-mt-18 origin-bottom transition-all duration-300 hover:-translate-y-10 cursor-pointer"
                    style={{
+                      width: isMobile ? '40px' : '96px', // Matches xs vs sm sizes approx
+                      height: isMobile ? '64px' : '144px',
                       transform: `rotate(${angle}deg) translateY(-${radius + randomY}px)`,
                       zIndex: i
                    }}
                    onClick={() => drawCardAtIndex(i)}
                  >
-                    <Card isRevealed={false} size="sm" showLabel={false} className="shadow-lg hover:shadow-amber-500/50 hover:ring-2 ring-amber-400/50 rounded-lg" />
+                    <Card 
+                        isRevealed={false} 
+                        size={isMobile ? 'xs' : 'sm'} 
+                        showLabel={false} 
+                        className="shadow-lg hover:shadow-amber-500/50 hover:ring-2 ring-amber-400/50 rounded-lg" 
+                    />
                  </div>
               );
            })}
            
-           {/* Decorative center of fan */}
-           {drawMode === DrawMode.MANUAL && (
+           {/* Decorative center of fan - Only show on desktop or if space permits */}
+           {!isMobile && drawMode === DrawMode.MANUAL && (
              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-[#0f0c29] rounded-full border border-slate-700 blur-xl"></div>
            )}
         </div>
